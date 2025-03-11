@@ -42,9 +42,9 @@ async def root():
 def read_item(item_id: int, q: Optional[str] = None):
     return {"item_id": item_id, "q": q}
 
-@app.post("/process-input/{msg}")
-async def process_input(msg: str):
-    response = agent.process_input(msg)
+@app.post("/process-input")
+async def process_input(user_input: str):
+    response = agent.process_input(user_input)
     return {"response": response}
 
 
