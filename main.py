@@ -4,8 +4,18 @@ import os
 from fastapi import FastAPI
 from pydantic import BaseModel
 from openai import OpenAI
+from fastapi.middleware.cors import CORSMiddleware
 
 app = FastAPI()
+
+# Add CORS middleware
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["https://zilver123.github.io"],  # Allow specific origin
+    allow_credentials=True,
+    allow_methods=["*"],  # Allow all methods
+    allow_headers=["*"],  # Allow all headers
+)
 
 class DeepSeekAgent:
     def __init__(self, api_key, model_name="deepseek-chat"):
