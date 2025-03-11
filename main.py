@@ -2,6 +2,7 @@ from typing import Optional
 import os
 
 from fastapi import FastAPI
+from pydantic import BaseModel
 from openai import OpenAI
 
 app = FastAPI()
@@ -34,6 +35,9 @@ class DeepSeekAgent:
 deepseek_api_key = os.getenv('deepseek_api_key')
 agent = DeepSeekAgent(api_key=deepseek_api_key)
 
+class InputData(BaseModel):
+    user_input: str
+
 @app.get("/")
 async def root():
     return {"message": "Hello World"}
@@ -43,8 +47,8 @@ def read_item(item_id: int, q: Optional[str] = None):
     return {"item_id": item_id, "q": q}
 
 @app.post("/process-input")
-async def process_input(user_input: str):
-    response = agent.process_input(user_input)
+async def process_input(data: InputData):
+    response = agent.process_input(data.user_input)
     return {"response": response}
 
 
