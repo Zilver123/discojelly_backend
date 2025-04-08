@@ -53,7 +53,8 @@ class Service:
         self.client = OpenAI(api_key=api_key)
         self.supabase = get_supabase_client()
         self.agent = get_cached_agent(agent_name)
-        self.tools = self.load_tools(self.agent.tool_ids or [])
+        tool_ids = self.agent.tools.get('ids', []) if self.agent.tools else []
+        self.tools = self.load_tools(tool_ids)
         self.context = [{"role": "system", "content": self.agent.system_prompt or ""}]
         self.api_handlers: Dict[str, Any] = {
             "Replicate": tool_replicate
@@ -73,7 +74,7 @@ class Service:
                     }
                 })
             except Exception as e:
-                print(f"Error loading tool {tool_id}: {str(e)}")
+                logger.error(f"Error loading tool {tool_id}: {str(e)}")
                 continue
         return tools
 
