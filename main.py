@@ -1,15 +1,20 @@
 from typing import Optional, Dict, Any, List
 import os
 import json
+import logging
 from functools import lru_cache
 import tool_replicate
 from models import Tool, AIAgent, get_supabase_client
-from fastapi import FastAPI, HTTPException, Depends
+from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from openai import OpenAI
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.security import APIKeyHeader
 
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+# Get environment variables
 KEY = os.getenv('OPENAI_API_KEY')
 if KEY is None:
     raise ValueError("OPENAI_API_KEY environment variable is not set.")
@@ -19,14 +24,11 @@ app = FastAPI()
 # Add CORS middleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["https://zilver123.github.io"],  # Allow specific origin
+    allow_origins=["https://zilver123.github.io"],
     allow_credentials=True,
-    allow_methods=["*"],  # Allow all methods
-    allow_headers=["*"],  # Allow all headers
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
-
-# API Key security
-api_key_header = APIKeyHeader(name="X-API-Key")
 
 @lru_cache(maxsize=100)
 def get_cached_agent(agent_name: str) -> AIAgent:
@@ -81,19 +83,19 @@ class Service:
             tool = next((t for t in self.tools if t["function"]["name"] == name), None)
             if not tool:
                 raise ValueError(f"Tool {name} not found in loaded tools")
-            
+                
             # Get the tool details from database
             response = self.supabase.table('tools').select('*').eq('name', name).execute()
             if not response.data:
                 raise ValueError(f"Tool {name} not found in database")
-            
+                
             tool_details = Tool(**response.data[0])
             
             # Get the appropriate handler based on api_name
             handler = self.api_handlers.get(tool_details.api_name)
             if not handler:
                 raise ValueError(f"API {tool_details.api_name} not supported")
-            
+                
             # Call the handler with the model and args
             return handler.generate(tool_details.model, args)
         except Exception as e:
@@ -151,7 +153,7 @@ async def root():
     return {"message": "Hello World"}
 
 @app.post("/process-input")
-async def process_input(data: InputData, api_key: str = Depends(api_key_header)):
+async def process_input(data: InputData):
     try:
         agent = Service(api_key=KEY, agent_name=data.agent_name)
         response = agent.main(data.user_input)
