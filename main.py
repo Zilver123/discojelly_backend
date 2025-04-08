@@ -2,9 +2,8 @@ from typing import Optional
 import os
 import json
 import tool_replicate
-from tools_config import tools
-
-from fastapi import FastAPI
+from models import Tool, AIAgent, get_supabase_client
+from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from openai import OpenAI
 from fastapi.middleware.cors import CORSMiddleware
@@ -25,13 +24,36 @@ app.add_middleware(
 )
 
 class Service:
-    def __init__(self, api_key, config):
+    def __init__(self, api_key: str, agent_name: str):
         self.client = OpenAI(api_key=api_key)
-        self.tools = config["tools"]
-        self.model = config["model"]
-        self.context = [{"role": "system", "content": config["instructions"]}]
+        self.supabase = get_supabase_client()
+        self.agent = self.load_agent(agent_name)
+        self.tools = self.load_tools(self.agent.tool_ids or [])
+        self.context = [{"role": "system", "content": self.agent.system_prompt or ""}]
     
-    def run_tool(self, name, args):
+    def load_agent(self, agent_name: str) -> AIAgent:
+        response = self.supabase.table('ai_agents').select('*').eq('name', agent_name).execute()
+        if not response.data:
+            raise HTTPException(status_code=404, detail=f"Agent {agent_name} not found")
+        return AIAgent(**response.data[0])
+    
+    def load_tools(self, tool_ids: list) -> list:
+        tools = []
+        for tool_id in tool_ids:
+            response = self.supabase.table('tools').select('*').eq('id', tool_id).execute()
+            if response.data:
+                tool = Tool(**response.data[0])
+                tools.append({
+                    "type": "function",
+                    "function": {
+                        "name": tool.name,
+                        "description": tool.description,
+                        "parameters": tool.json_schema
+                    }
+                })
+        return tools
+
+    def run_tool(self, name: str, args: dict):
         if name == "generate_image":
             return tool_replicate.generate("black-forest-labs/flux-1.1-pro", args)
         elif name == "generate_music_v2":
@@ -39,12 +61,12 @@ class Service:
         elif name == "generate_music":
             return tool_replicate.generate("minimax/music-01", args)
 
-    def call_model(self, message):
+    def call_model(self, message: Optional[str] = None):
         if message is not None:
             self.context.append({"role": "user", "content": message})
-        print(self.context)
+        
         completion = self.client.chat.completions.create(
-            model=self.model,
+            model=self.agent.model or "gpt-4",
             messages=self.context,
             tools=self.tools,
         )
@@ -58,7 +80,7 @@ class Service:
             self.context.append(payload.message)
             self.context.append({"role": "tool", "tool_call_id": tool_call.id, "content": str(result)})
 
-    def main(self, message):
+    def main(self, message: Optional[str] = None):
         completion = self.call_model(message)
         payload = completion.choices[0]
 
@@ -69,47 +91,9 @@ class Service:
             self.context.append(payload.message)
             return payload.message.content
 
-config = {
-    "model": "gpt-4",
-    "instructions": "You are a creator tool for content creators. You can generate images, videos, and text.",
-    "tools": tools
-}
-
-agent = Service(api_key=KEY, config=config)
-
-"""
-class DeepSeekAgent:
-    def __init__(self, api_key, model_name="deepseek-chat"):
-        self.client = OpenAI(api_key=api_key, base_url="https://api.deepseek.com")
-        self.model = model_name
-        self.context = []
-
-    def process_input(self, user_input):
-        # Add input to context
-        self.context.append({"role": "user", "content": user_input})
-        
-        # Generate response
-        response = self.client.chat.completions.create(
-            model=self.model,
-            messages=self.context,
-            temperature=0.7,
-            max_tokens=1000
-        )
-        
-        # Update context with response
-        assistant_response = response.choices[0].message.content
-        self.context.append({"role": "assistant", "content": assistant_response})
-        
-        return assistant_response
-
-# Initialize DeepSeekAgent with the API key from the environment variable
-deepseek_api_key = os.getenv('deepseek_api_key')
-agent = DeepSeekAgent(api_key=deepseek_api_key)
-
-"""
-
 class InputData(BaseModel):
     user_input: str
+    agent_name: str
 
 @app.get("/")
 async def root():
@@ -121,8 +105,12 @@ def read_item(item_id: int, q: Optional[str] = None):
 
 @app.post("/process-input")
 async def process_input(data: InputData):
-    response = agent.main(data.user_input)
-    return {"response": response}
+    try:
+        agent = Service(api_key=KEY, agent_name=data.agent_name)
+        response = agent.main(data.user_input)
+        return {"response": response}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 

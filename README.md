@@ -1,27 +1,91 @@
-# Deploy FastAPI on Render
+# DiscoJelly Backend
 
-Use this repo as a template to deploy a Python [FastAPI](https://fastapi.tiangolo.com) service on Render.
+A dynamic AI agent system that loads tools and configurations from Supabase.
 
-See https://render.com/docs/deploy-fastapi or follow the steps below:
+## Setup
 
-## Manual Steps
+1. Clone the repository
+2. Install dependencies:
+   ```bash
+   pip install -r requirements.txt
+   ```
+3. Copy `.env.example` to `.env` and fill in your credentials:
+   ```bash
+   cp .env.example .env
+   ```
+4. Update the `.env` file with your:
+   - OpenAI API Key
+   - Supabase URL
+   - Supabase Key
 
-1. You may use this repository directly or [create your own repository from this template](https://github.com/render-examples/fastapi/generate) if you'd like to customize the code.
-2. Create a new Web Service on Render.
-3. Specify the URL to your new repository or this repository.
-4. Render will automatically detect that you are deploying a Python service and use `pip` to download the dependencies.
-5. Specify the following as the Start Command.
+## Database Setup
 
-    ```shell
-    uvicorn main:app --host 0.0.0.0 --port $PORT
-    ```
+The system uses two main tables in Supabase:
 
-6. Click Create Web Service.
+### Tools Table
+```sql
+create table public.tools (
+  id uuid not null default extensions.uuid_generate_v4 (),
+  name text not null,
+  description text not null,
+  json_schema jsonb not null,
+  created_at timestamp with time zone not null default now(),
+  updated_at timestamp with time zone not null default now(),
+  constraint tools_pkey primary key (id)
+) TABLESPACE pg_default;
+```
 
-Or simply click:
+### AI Agents Table
+```sql
+create table public.ai_agents (
+  id uuid not null default extensions.uuid_generate_v4 (),
+  name text not null,
+  description text null,
+  category text null,
+  model text null,
+  system_prompt text null,
+  template text null,
+  resources jsonb null default '[]'::jsonb,
+  chat_history jsonb null default '[]'::jsonb,
+  tool_ids text[] null default '{}'::text[],
+  tools jsonb null default '[]'::jsonb,
+  creator_id uuid null,
+  created_at timestamp with time zone null default now(),
+  updated_at timestamp with time zone not null default now(),
+  capabilities jsonb null default '{}'::jsonb,
+  constraint ai_agents_pkey primary key (id),
+  constraint ai_agents_creator_id_fkey foreign KEY (creator_id) references profiles (id)
+) TABLESPACE pg_default;
+```
 
-[![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/render-examples/fastapi)
+## Running the Server
 
-## Thanks
+```bash
+uvicorn main:app --reload
+```
 
-Thanks to [Harish](https://harishgarg.com) for the [inspiration to create a FastAPI quickstart for Render](https://twitter.com/harishkgarg/status/1435084018677010434) and for some sample code!
+## API Endpoints
+
+### POST /process-input
+Process user input with a specific agent.
+
+Request body:
+```json
+{
+  "user_input": "Your message here",
+  "agent_name": "name_of_agent"
+}
+```
+
+Response:
+```json
+{
+  "response": "Agent's response"
+}
+```
+
+## Error Handling
+
+The API will return appropriate HTTP status codes:
+- 404: Agent not found
+- 500: Server error
