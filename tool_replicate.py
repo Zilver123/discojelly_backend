@@ -16,20 +16,46 @@ def get_tool_schema(function_name: str) -> Optional[Dict[str, Any]]:
             return None
         return response.data[0]['json_schema']
     except Exception as e:
-        print(f"Error fetching tool schema: {str(e)}")
+        logger.error(f"Error fetching tool schema: {str(e)}")
         return None
 
 def get_parameter_type(function_name: str, param_name: str) -> Optional[str]:
     """Get the expected type for a parameter from the tools configuration."""
-    supabase = get_supabase_client()
-    response = supabase.table('tools').select('json_schema').eq('name', function_name).execute()
-    if not response.data:
+    json_schema = get_tool_schema(function_name)
+    if not json_schema:
         return None
         
-    json_schema = response.data[0]['json_schema']
     properties = json_schema.get('properties', {})
     if param_name in properties:
         return properties[param_name].get('type')
+    return None
+
+def get_parameter_default(json_schema: Dict[str, Any], param_name: str) -> Any:
+    """Get the default value for a parameter from its JSON schema."""
+    properties = json_schema.get('properties', {})
+    if param_name in properties:
+        param_schema = properties[param_name]
+        
+        # Check for explicit default value
+        if 'default' in param_schema:
+            return param_schema['default']
+            
+        # Set sensible defaults based on type and constraints
+        param_type = param_schema.get('type')
+        if param_type == 'integer':
+            if 'minimum' in param_schema:
+                return param_schema['minimum']
+            return 0
+        elif param_type == 'number':
+            if 'minimum' in param_schema:
+                return param_schema['minimum']
+            return 0.0
+        elif param_type == 'boolean':
+            return False
+        elif param_type == 'string':
+            if 'enum' in param_schema and param_schema['enum']:
+                return param_schema['enum'][0]
+            return ''
     return None
 
 def convert_value(value: Any, expected_type: str) -> Any:
@@ -50,38 +76,43 @@ def convert_value(value: Any, expected_type: str) -> Any:
             return str(value)
         return value
     except (ValueError, TypeError) as e:
-        print(f"Error converting value {value} to type {expected_type}: {str(e)}")
+        logger.error(f"Error converting value {value} to type {expected_type}: {str(e)}")
         return value
 
 def generate(model: str, args: Dict[str, Any]) -> Any:
     """Generate output using the Replicate API with improved error handling."""
     try:
-        # Get the function name from the database
+        # Get the tool details from the database
         supabase = get_supabase_client()
-        response = supabase.table('tools').select('name').eq('model', model).execute()
+        response = supabase.table('tools').select('name, json_schema').eq('model', model).execute()
         
         if not response.data:
             raise ValueError(f"No tool found for model {model}")
             
-        function_name = response.data[0]['name']
+        tool_data = response.data[0]
+        function_name = tool_data['name']
+        json_schema = tool_data['json_schema']
         
-        # Validate required parameters
-        json_schema = get_tool_schema(function_name)
-        if json_schema:
-            required_params = json_schema.get('required', [])
-            missing_params = [param for param in required_params if param not in args]
-            if missing_params:
-                raise ValueError(f"Missing required parameters: {', '.join(missing_params)}")
+        # Get required parameters from schema
+        required_params = json_schema.get('required', [])
+        
+        # Set default values for all required parameters if not provided
+        for param in required_params:
+            if param not in args:
+                default_value = get_parameter_default(json_schema, param)
+                if default_value is not None:
+                    args[param] = default_value
+        
+        # Check for missing required parameters after setting defaults
+        missing_params = [param for param in required_params if param not in args]
+        if missing_params:
+            raise ValueError(f"Missing required parameters: {', '.join(missing_params)}")
         
         # Convert all arguments to their expected types
         for key, value in args.items():
             expected_type = get_parameter_type(function_name, key)
             if expected_type:
                 args[key] = convert_value(value, expected_type)
-        
-        # For image generation, make image_prompt optional if not provided
-        if function_name == 'generate_image' and 'image_prompt' not in args:
-            args['image_prompt'] = ''
         
         logger.info(f"Running {function_name} with args: {args}")
         output = replicate.run(
