@@ -30,7 +30,14 @@ def get_parameter_type(function_name: str, param_name: str) -> Optional[str]:
         return properties[param_name].get('type')
     return None
 
-def get_parameter_default(json_schema: Dict[str, Any], param_name: str) -> Any:
+def get_parameter_format(json_schema: Dict[str, Any], param_name: str) -> Optional[str]:
+    """Get the format of a parameter from its JSON schema."""
+    properties = json_schema.get('properties', {})
+    if param_name in properties:
+        return properties[param_name].get('format')
+    return None
+
+def get_parameter_default(json_schema: Dict[str, Any], param_name: str, function_name: str) -> Any:
     """Get the default value for a parameter from its JSON schema."""
     properties = json_schema.get('properties', {})
     if param_name in properties:
@@ -39,6 +46,10 @@ def get_parameter_default(json_schema: Dict[str, Any], param_name: str) -> Any:
         # Check for explicit default value
         if 'default' in param_schema:
             return param_schema['default']
+            
+        # Special handling for image generation
+        if function_name == 'generate_image' and param_name == 'image_prompt':
+            return None  # Don't set a default for image_prompt
             
         # Set sensible defaults based on type and constraints
         param_type = param_schema.get('type')
@@ -58,7 +69,7 @@ def get_parameter_default(json_schema: Dict[str, Any], param_name: str) -> Any:
             return ''
     return None
 
-def convert_value(value: Any, expected_type: str) -> Any:
+def convert_value(value: Any, expected_type: str, format: Optional[str] = None) -> Any:
     """Convert a value to the expected type with improved error handling."""
     if value is None:
         return value
@@ -73,6 +84,8 @@ def convert_value(value: Any, expected_type: str) -> Any:
                 return value.lower() == 'true'
             return bool(value)
         elif expected_type == "string":
+            if format == 'uri' and value == '':
+                return None  # Don't convert empty strings to URIs
             return str(value)
         return value
     except (ValueError, TypeError) as e:
@@ -99,7 +112,7 @@ def generate(model: str, args: Dict[str, Any]) -> Any:
         # Set default values for all required parameters if not provided
         for param in required_params:
             if param not in args:
-                default_value = get_parameter_default(json_schema, param)
+                default_value = get_parameter_default(json_schema, param, function_name)
                 if default_value is not None:
                     args[param] = default_value
         
@@ -108,11 +121,15 @@ def generate(model: str, args: Dict[str, Any]) -> Any:
         if missing_params:
             raise ValueError(f"Missing required parameters: {', '.join(missing_params)}")
         
-        # Convert all arguments to their expected types
+        # Convert all arguments to their expected types and formats
         for key, value in args.items():
             expected_type = get_parameter_type(function_name, key)
+            expected_format = get_parameter_format(json_schema, key)
             if expected_type:
-                args[key] = convert_value(value, expected_type)
+                args[key] = convert_value(value, expected_type, expected_format)
+        
+        # Remove None values from args
+        args = {k: v for k, v in args.items() if v is not None}
         
         logger.info(f"Running {function_name} with args: {args}")
         output = replicate.run(
