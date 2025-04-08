@@ -12,6 +12,8 @@ class Tool(BaseModel):
     name: str
     description: str
     json_schema: Dict[str, Any]
+    api_name: str
+    model: str
     created_at: datetime
     updated_at: datetime
 
