@@ -47,10 +47,6 @@ def get_parameter_default(json_schema: Dict[str, Any], param_name: str, function
         if 'default' in param_schema:
             return param_schema['default']
             
-        # Special handling for image generation
-        if function_name == 'generate_image' and param_name == 'image_prompt':
-            return None  # Don't set a default for image_prompt
-            
         # Set sensible defaults based on type and constraints
         param_type = param_schema.get('type')
         if param_type == 'integer':
@@ -106,20 +102,71 @@ def generate(model: str, args: Dict[str, Any]) -> Any:
         function_name = tool_data['name']
         json_schema = tool_data['json_schema']
         
-        # Get required parameters from schema
-        required_params = json_schema.get('required', [])
+        # Log the schema for debugging
+        logger.info(f"Tool schema for {function_name}: {json_schema}")
         
-        # Set default values for all required parameters if not provided
-        for param in required_params:
-            if param not in args:
-                default_value = get_parameter_default(json_schema, param, function_name)
-                if default_value is not None:
-                    args[param] = default_value
-        
-        # Check for missing required parameters after setting defaults
-        missing_params = [param for param in required_params if param not in args]
-        if missing_params:
-            raise ValueError(f"Missing required parameters: {', '.join(missing_params)}")
+        # Direct handling for known tools
+        if function_name == "generate_image":
+            # For image generation, we only need prompt and optional parameters
+            if 'prompt' not in args:
+                raise ValueError("Prompt is required for image generation")
+            # Set defaults for optional parameters
+            args.setdefault('width', 512)
+            args.setdefault('height', 512)
+            args.setdefault('seed', 42)
+            args.setdefault('aspect_ratio', '1:1')
+            args.setdefault('output_format', 'png')
+            args.setdefault('output_quality', 100)
+            args.setdefault('safety_tolerance', 3)
+            args.setdefault('prompt_upsampling', True)
+            # Remove image_prompt if not provided
+            if 'image_prompt' not in args:
+                args.pop('image_prompt', None)
+                
+        elif function_name == "generate_music_v2":
+            # For music generation, we need prompt and optional parameters
+            if 'prompt' not in args:
+                raise ValueError("Prompt is required for music generation")
+            # Set defaults for optional parameters
+            args.setdefault('duration', 8)
+            args.setdefault('temperature', 1.0)
+            args.setdefault('top_k', 250)
+            args.setdefault('top_p', 0)
+            args.setdefault('seed', 42)
+            args.setdefault('model_version', 'stereo-melody-large')
+            args.setdefault('output_format', 'wav')
+            args.setdefault('continuation', False)
+            args.setdefault('multi_band_diffusion', False)
+            args.setdefault('normalization_strategy', 'loudness')
+            args.setdefault('classifier_free_guidance', 3)
+            # Remove input_audio if not provided
+            if 'input_audio' not in args:
+                args.pop('input_audio', None)
+                args.pop('continuation_start', None)
+                args.pop('continuation_end', None)
+                
+        else:
+            # For unknown tools, use schema validation
+            required_params = json_schema.get('required', [])
+            properties = json_schema.get('properties', {})
+            
+            # Handle conditional requirements
+            for param in list(required_params):
+                param_schema = properties.get(param, {})
+                if param_schema.get('format') == 'uri' and param not in args:
+                    required_params.remove(param)
+                elif param_schema.get('type') == 'boolean' and param not in args:
+                    args[param] = False
+                    required_params.remove(param)
+            
+            # Set defaults for required parameters
+            for param in required_params:
+                if param not in args:
+                    default_value = get_parameter_default(json_schema, param, function_name)
+                    if default_value is not None:
+                        args[param] = default_value
+                    else:
+                        raise ValueError(f"Missing required parameter: {param}")
         
         # Convert all arguments to their expected types and formats
         for key, value in args.items():
