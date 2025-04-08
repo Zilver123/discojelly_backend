@@ -2,6 +2,9 @@ import replicate
 from models import get_supabase_client
 from functools import lru_cache
 from typing import Dict, Any, Optional
+import logging
+
+logger = logging.getLogger(__name__)
 
 @lru_cache(maxsize=100)
 def get_tool_schema(function_name: str) -> Optional[Dict[str, Any]]:
@@ -18,10 +21,12 @@ def get_tool_schema(function_name: str) -> Optional[Dict[str, Any]]:
 
 def get_parameter_type(function_name: str, param_name: str) -> Optional[str]:
     """Get the expected type for a parameter from the tools configuration."""
-    json_schema = get_tool_schema(function_name)
-    if not json_schema:
+    supabase = get_supabase_client()
+    response = supabase.table('tools').select('json_schema').eq('name', function_name).execute()
+    if not response.data:
         return None
         
+    json_schema = response.data[0]['json_schema']
     properties = json_schema.get('properties', {})
     if param_name in properties:
         return properties[param_name].get('type')
@@ -53,13 +58,12 @@ def generate(model: str, args: Dict[str, Any]) -> Any:
     try:
         # Get the function name from the database
         supabase = get_supabase_client()
-        response = supabase.table('tools').select('name, api_name').eq('model', model).execute()
+        response = supabase.table('tools').select('name').eq('model', model).execute()
         
         if not response.data:
             raise ValueError(f"No tool found for model {model}")
             
-        tool_data = response.data[0]
-        function_name = tool_data['name']
+        function_name = response.data[0]['name']
         
         # Validate required parameters
         json_schema = get_tool_schema(function_name)
@@ -75,12 +79,16 @@ def generate(model: str, args: Dict[str, Any]) -> Any:
             if expected_type:
                 args[key] = convert_value(value, expected_type)
         
-        # Run the model
+        # For image generation, make image_prompt optional if not provided
+        if function_name == 'generate_image' and 'image_prompt' not in args:
+            args['image_prompt'] = ''
+        
+        logger.info(f"Running {function_name} with args: {args}")
         output = replicate.run(
             model,
             input=args
         )
         return output
     except Exception as e:
-        print(f"Error in generate function: {str(e)}")
+        logger.error(f"Error in generate function: {str(e)}")
         raise
