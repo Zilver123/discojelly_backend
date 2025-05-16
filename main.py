@@ -9,6 +9,7 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from openai import OpenAI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -21,32 +22,46 @@ if KEY is None:
 
 app = FastAPI()
 
-# Add CORS middleware
+# Add CORS middleware with more permissive settings for development
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["https://zilver123.github.io"],
+    allow_origins=[
+        "http://localhost:62323",  # Flutter web development server
+        "http://localhost:3000",   # Common development port
+        "https://zilver123.github.io",  # Production domain
+        "https://discojelly.vercel.app",  # Production domain
+    ],
     allow_credentials=True,
-    allow_methods=["*"],
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allow_headers=["*"],
+    expose_headers=["*"],
 )
 
 @lru_cache(maxsize=100)
 def get_cached_agent(agent_name: str) -> AIAgent:
     """Get an agent from the database with caching."""
-    supabase = get_supabase_client()
-    response = supabase.table('ai_agents').select('*').eq('name', agent_name).execute()
-    if not response.data:
-        raise HTTPException(status_code=404, detail=f"Agent {agent_name} not found")
-    return AIAgent(**response.data[0])
+    try:
+        supabase = get_supabase_client()
+        response = supabase.table('ai_agents').select('*').eq('name', agent_name).execute()
+        if not response.data:
+            raise HTTPException(status_code=404, detail=f"Agent {agent_name} not found")
+        return AIAgent(**response.data[0])
+    except Exception as e:
+        logger.error(f"Error getting agent {agent_name}: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error retrieving agent: {str(e)}")
 
 @lru_cache(maxsize=100)
 def get_cached_tool(tool_id: str) -> Tool:
     """Get a tool from the database with caching."""
-    supabase = get_supabase_client()
-    response = supabase.table('tools').select('*').eq('id', tool_id).execute()
-    if not response.data:
-        raise HTTPException(status_code=404, detail=f"Tool with ID {tool_id} not found")
-    return Tool(**response.data[0])
+    try:
+        supabase = get_supabase_client()
+        response = supabase.table('tools').select('*').eq('id', tool_id).execute()
+        if not response.data:
+            raise HTTPException(status_code=404, detail=f"Tool with ID {tool_id} not found")
+        return Tool(**response.data[0])
+    except Exception as e:
+        logger.error(f"Error getting tool {tool_id}: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error retrieving tool: {str(e)}")
 
 class Service:
     def __init__(self, api_key: str, agent_name: str):
@@ -100,7 +115,7 @@ class Service:
             # Call the handler with the model and args
             return handler.generate(tool_details.model, args)
         except Exception as e:
-            print(f"Error running tool {name}: {str(e)}")
+            logger.error(f"Error running tool {name}: {str(e)}")
             raise
 
     def call_model(self, message: Optional[str] = None) -> Any:
@@ -115,7 +130,7 @@ class Service:
             )
             return completion
         except Exception as e:
-            print(f"Error calling model: {str(e)}")
+            logger.error(f"Error calling model: {str(e)}")
             raise
 
     def call_tools(self, payload: Any) -> None:
@@ -127,7 +142,7 @@ class Service:
                 self.context.append(payload.message)
                 self.context.append({"role": "tool", "tool_call_id": tool_call.id, "content": str(result)})
         except Exception as e:
-            print(f"Error calling tools: {str(e)}")
+            logger.error(f"Error calling tools: {str(e)}")
             raise
 
     def main(self, message: Optional[str] = None) -> str:
@@ -142,7 +157,7 @@ class Service:
                 self.context.append(payload.message)
                 return payload.message.content
         except Exception as e:
-            print(f"Error in main function: {str(e)}")
+            logger.error(f"Error in main function: {str(e)}")
             raise
 
 class InputData(BaseModel):
@@ -156,11 +171,37 @@ async def root():
 @app.post("/process-input")
 async def process_input(data: InputData):
     try:
+        logger.info(f"Processing input for agent {data.agent_name}")
         agent = Service(api_key=KEY, agent_name=data.agent_name)
         response = agent.main(data.user_input)
-        return {"response": response}
+        return JSONResponse(
+            content={"response": response},
+            status_code=200,
+            headers={
+                "Access-Control-Allow-Origin": "*",
+                "Access-Control-Allow-Methods": "POST, OPTIONS",
+                "Access-Control-Allow-Headers": "Content-Type",
+            }
+        )
+    except HTTPException as e:
+        logger.error(f"HTTP error processing input: {str(e)}")
+        return JSONResponse(
+            content={"error": e.detail},
+            status_code=e.status_code,
+            headers={
+                "Access-Control-Allow-Origin": "*",
+                "Access-Control-Allow-Methods": "POST, OPTIONS",
+                "Access-Control-Allow-Headers": "Content-Type",
+            }
+        )
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-
+        logger.error(f"Error processing input: {str(e)}")
+        return JSONResponse(
+            content={"error": str(e)},
+            status_code=500,
+            headers={
+                "Access-Control-Allow-Origin": "*",
+                "Access-Control-Allow-Methods": "POST, OPTIONS",
+                "Access-Control-Allow-Headers": "Content-Type",
+            }
+        )
