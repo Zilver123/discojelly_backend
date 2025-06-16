@@ -25,7 +25,7 @@ Example output:\n{{"script": "Meet the Test Product! Soft, cuddly, and perfect f
 Input:\n{json.dumps(input_json)}
 '''
         response = client.chat.completions.create(
-            model="gpt-4o",
+            model="gpt-4-turbo-preview",
             messages=[{"role": "user", "content": prompt}],
             max_tokens=512
         )
@@ -76,4 +76,9 @@ Input:\n{json.dumps(input_json)}
 
         return json.dumps(sb)
     except Exception as e:
-        return json.dumps({"script": f"Error: {e}", "media": []}) 
+        print(f"Error in generate_storyboard: {str(e)}")
+        # Return a valid JSON string with error information
+        return json.dumps({
+            "script": f"Error generating storyboard: {str(e)}",
+            "media": []
+        }) 

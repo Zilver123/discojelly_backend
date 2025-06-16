@@ -32,12 +32,12 @@ app.mount("/uploads", StaticFiles(directory=UPLOAD_DIR), name="uploads")
 # Update CORS configuration
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["https://discojelly-frontend.onrender.com"],  # Explicitly allow your frontend domain
+    allow_origins=["*"],  # Allow all origins during development
     allow_credentials=True,
-    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],  # Explicitly list allowed methods
+    allow_methods=["*"],  # Allow all methods
     allow_headers=["*"],
     expose_headers=["*"],
-    max_age=3600,  # Cache preflight requests for 1 hour
+    max_age=3600,
 )
 
 # File cleanup task
@@ -72,82 +72,90 @@ async def input_phase(
     creative_prompt: str = Form(...),
     media: Optional[List[UploadFile]] = File(None)
 ):
-    # Scrape product info if URL provided
-    product_data = scrape_url(product_url) if product_url else {}
-    # Save uploaded media
-    media_files = []
-    media_json = []
-    if media:
-        for file in media:
-            file_path = os.path.join(UPLOAD_DIR, file.filename)
-            with open(file_path, "wb") as f:
-                f.write(await file.read())
-            media_files.append(file_path)
-            media_json.append({"path": f"uploads/{file.filename}", "description": ""})
-    # Add scraped images to media_json (use local download for analysis)
-    scraped_image_paths = []
-    if product_data.get("images"):
-        for i, img_url in enumerate(product_data["images"]):
-            # Download image locally for analysis
-            local_path = os.path.join(UPLOAD_DIR, f"scraped_{i}.jpg")
-            try:
-                r = requests.get(img_url, timeout=5)
-                with open(local_path, "wb") as f:
-                    f.write(r.content)
-                scraped_image_paths.append(local_path)
-                media_json.append({"path": img_url, "description": ""})
-            except Exception:
-                pass
-    # Analyze all media (uploaded + scraped)
-    all_media_paths = media_files + scraped_image_paths
-    media_descriptions = analyze_media(all_media_paths) if all_media_paths else {}
-    # Fill in media descriptions
-    for m in media_json:
-        # Try to match by filename or URL ending
-        desc = ""
-        for k, v in media_descriptions.items():
-            if m["path"].endswith(os.path.basename(k)) or os.path.basename(m["path"]) in k:
-                desc = v
-                # Also map the URL to the description if it's a URL
-                if m["path"].startswith("http"):
-                    media_descriptions[m["path"]] = v
-                break
-        m["description"] = desc or "Image"
-    # After filling in media descriptions, map each scraped URL to its local file's description
-    if product_data.get("images"):
-        for i, img_url in enumerate(product_data["images"]):
-            local_path = os.path.join(UPLOAD_DIR, f"scraped_{i}.jpg")
-            if local_path in media_descriptions:
-                media_descriptions[img_url] = media_descriptions[local_path]
-    # Remove duplicates by path
-    seen = set()
-    deduped_media = []
-    for m in media_json:
-        if m["path"] not in seen:
-            deduped_media.append(m)
-            seen.add(m["path"])
-    # Build input for storyboard (no images field)
-    input_json = {
-        "creative_prompt": creative_prompt,
-        "product": {
-            "title": product_data.get("title", ""),
-            "description": product_data.get("description", "")
-        },
-        "media": deduped_media
-    }
-    # Generate storyboard (strict JSON)
-    storyboard_json = generate_storyboard(input_json)
-    # --- Combine uploaded and scraped image URLs for media_files ---
-    uploaded_files = media_files if media_files else []
-    scraped_urls = [m["path"] for m in deduped_media if m["path"].startswith("http")]
-    all_media_files = uploaded_files + scraped_urls
-    return JSONResponse({
-        "product": product_data,
-        "creative_prompt": creative_prompt,
-        "media_files": all_media_files,
-        "media_descriptions": media_descriptions,
-        "storyboard": storyboard_json
-    })
+    try:
+        # Scrape product info if URL provided
+        product_data = scrape_url(product_url) if product_url else {}
+        # Save uploaded media
+        media_files = []
+        media_json = []
+        if media:
+            for file in media:
+                file_path = os.path.join(UPLOAD_DIR, file.filename)
+                with open(file_path, "wb") as f:
+                    f.write(await file.read())
+                media_files.append(file_path)
+                media_json.append({"path": f"uploads/{file.filename}", "description": ""})
+        # Add scraped images to media_json (use local download for analysis)
+        scraped_image_paths = []
+        if product_data.get("images"):
+            for i, img_url in enumerate(product_data["images"]):
+                # Download image locally for analysis
+                local_path = os.path.join(UPLOAD_DIR, f"scraped_{i}.jpg")
+                try:
+                    r = requests.get(img_url, timeout=5)
+                    with open(local_path, "wb") as f:
+                        f.write(r.content)
+                    scraped_image_paths.append(local_path)
+                    media_json.append({"path": img_url, "description": ""})
+                except Exception as e:
+                    print(f"Error downloading image {img_url}: {str(e)}")
+                    continue
+        # Analyze all media (uploaded + scraped)
+        all_media_paths = media_files + scraped_image_paths
+        media_descriptions = analyze_media(all_media_paths) if all_media_paths else {}
+        # Fill in media descriptions
+        for m in media_json:
+            # Try to match by filename or URL ending
+            desc = ""
+            for k, v in media_descriptions.items():
+                if m["path"].endswith(os.path.basename(k)) or os.path.basename(m["path"]) in k:
+                    desc = v
+                    # Also map the URL to the description if it's a URL
+                    if m["path"].startswith("http"):
+                        media_descriptions[m["path"]] = v
+                    break
+            m["description"] = desc or "Image"
+        # After filling in media descriptions, map each scraped URL to its local file's description
+        if product_data.get("images"):
+            for i, img_url in enumerate(product_data["images"]):
+                local_path = os.path.join(UPLOAD_DIR, f"scraped_{i}.jpg")
+                if local_path in media_descriptions:
+                    media_descriptions[img_url] = media_descriptions[local_path]
+        # Remove duplicates by path
+        seen = set()
+        deduped_media = []
+        for m in media_json:
+            if m["path"] not in seen:
+                deduped_media.append(m)
+                seen.add(m["path"])
+        # Build input for storyboard (no images field)
+        input_json = {
+            "creative_prompt": creative_prompt,
+            "product": {
+                "title": product_data.get("title", ""),
+                "description": product_data.get("description", "")
+            },
+            "media": deduped_media
+        }
+        # Generate storyboard (strict JSON)
+        storyboard_json = generate_storyboard(input_json)
+        # --- Combine uploaded and scraped image URLs for media_files ---
+        uploaded_files = media_files if media_files else []
+        scraped_urls = [m["path"] for m in deduped_media if m["path"].startswith("http")]
+        all_media_files = uploaded_files + scraped_urls
+        return JSONResponse({
+            "product": product_data,
+            "creative_prompt": creative_prompt,
+            "media_files": all_media_files,
+            "media_descriptions": media_descriptions,
+            "storyboard": storyboard_json
+        })
+    except Exception as e:
+        print(f"Error in input_phase: {str(e)}")
+        return JSONResponse(
+            status_code=500,
+            content={"error": str(e)}
+        )
 
 class RenderVideoRequest(BaseModel):
     storyboard: str  # JSON string
