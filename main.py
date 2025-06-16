@@ -10,6 +10,10 @@ from pydantic import BaseModel
 from openai import OpenAI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from service_builder import ServiceBuilder
+from service_scaffold import ServiceTester
+import sys
+import traceback
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -219,3 +223,74 @@ async def process_input(data: InputData):
                 "Access-Control-Allow-Headers": "Content-Type",
             }
         )
+
+def main():
+    try:
+        # Example user query
+        user_query = "5 instagram posts for a cafe"
+        
+        print("=" * 80)
+        print(f"Starting service generation for query: {user_query}")
+        print("=" * 80)
+        
+        # Initialize the service builder
+        builder = ServiceBuilder()
+        
+        # Build the service
+        print("\nBuilding service...")
+        service = builder.build_service(user_query)
+        
+        if not service:
+            print("\n❌ Failed to build service")
+            return
+        
+        print("\n✅ Service created successfully!")
+        print(f"Service Name: {service.name}")
+        print(f"Description: {service.description}")
+        
+        # Initialize the tester
+        tester = ServiceTester()
+        
+        # Test the service with sample input
+        test_input = {
+            "cafe_name": "Cozy Corner Cafe",
+            "cafe_description": "A charming cafe serving artisanal coffee and homemade pastries in a cozy atmosphere",
+            "target_audience": "Young professionals and students looking for a quiet place to work or relax"
+        }
+        
+        print("\nTesting service with sample input...")
+        print(f"Input: {json.dumps(test_input, indent=2)}")
+        
+        results = tester.test_service(service, test_input)
+        
+        print("\nTest Results:")
+        print(f"Input Validation: {'✅ Passed' if results['input_validation'] else '❌ Failed'}")
+        print(f"Output Validation: {'✅ Passed' if results['output_validation'] else '❌ Failed'}")
+        
+        if results['output']:
+            print("\nGenerated Output:")
+            print(json.dumps(results['output'], indent=2))
+            
+            # Test the output format
+            if isinstance(results['output'], list) and len(results['output']) == 5:
+                print("\n✅ Output format validation: Passed")
+                print(f"Number of posts generated: {len(results['output'])}")
+                
+                # Check each post
+                for i, post in enumerate(results['output'], 1):
+                    print(f"\nPost {i}:")
+                    print(f"Caption: {post.get('caption', 'Missing caption')}")
+                    print(f"Hashtags: {post.get('hashtags', 'Missing hashtags')}")
+            else:
+                print("\n❌ Output format validation: Failed")
+                print("Expected 5 posts, got:", len(results['output']) if isinstance(results['output'], list) else "non-list output")
+        
+    except Exception as e:
+        print("\n❌ Error occurred:")
+        print(str(e))
+        print("\nTraceback:")
+        traceback.print_exc()
+        sys.exit(1)
+
+if __name__ == "__main__":
+    main()
