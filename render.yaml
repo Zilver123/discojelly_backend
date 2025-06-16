@@ -6,6 +6,7 @@ services:
     plan: free
     autoDeploy: false
     buildCommand: |
+      mkdir -p uploads
       pip install -r requirements.txt
       pip install -e .
     startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
