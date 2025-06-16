@@ -1,296 +1,167 @@
-from typing import Optional, Dict, Any, List
-import os
-import json
-import logging
-from functools import lru_cache
-import tool_replicate
-from models import Tool, AIAgent, get_supabase_client
-from fastapi import FastAPI, HTTPException, Request
-from pydantic import BaseModel
-from openai import OpenAI
-from fastapi.middleware.cors import CORSMiddleware
+from fastapi import FastAPI, UploadFile, File, Form, Body
 from fastapi.responses import JSONResponse
-from service_builder import ServiceBuilder
-from service_scaffold import ServiceTester
-import sys
-import traceback
-
-# Configure logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
-
-# Get environment variables
-KEY = os.getenv('OPENAI_API_KEY')
-if KEY is None:
-    raise ValueError("OPENAI_API_KEY environment variable is not set.")
+from typing import List, Optional
+import os
+from pydantic import BaseModel
+from .tools.scrape_url import scrape_url
+from .tools.analyze_media import analyze_media
+from .tools.generate_storyboard import generate_storyboard
+from .tools.render_video import render_video
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
+import requests
+import tempfile
+import shutil
+import json
+import cv2
 
 app = FastAPI()
 
-# Add CORS middleware with more permissive settings for development
+# Mount uploads directory for static file serving
+app.mount("/uploads", StaticFiles(directory="uploads"), name="uploads")
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Allow all origins during development
+    allow_origins=["*"],  # For dev, allow all. For prod, restrict this.
     allow_credentials=True,
-    allow_methods=["*"],  # Allow all methods
-    allow_headers=["*"],  # Allow all headers
-    expose_headers=["*"],
-    max_age=3600,  # Cache preflight requests for 1 hour
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
-@app.middleware("http")
-async def log_requests(request: Request, call_next):
-    logger.info(f"Request: {request.method} {request.url}")
-    try:
-        body = await request.body()
-        if body:
-            logger.info(f"Request body: {body.decode()}")
-    except Exception as e:
-        logger.error(f"Error reading request body: {str(e)}")
-    
-    response = await call_next(request)
-    return response
+UPLOAD_DIR = "uploads"
+os.makedirs(UPLOAD_DIR, exist_ok=True)
 
-@lru_cache(maxsize=100)
-def get_cached_agent(agent_name: str) -> AIAgent:
-    """Get an agent from the database with caching."""
-    try:
-        supabase = get_supabase_client()
-        response = supabase.table('ai_agents').select('*').eq('name', agent_name).execute()
-        if not response.data:
-            raise HTTPException(status_code=404, detail=f"Agent {agent_name} not found")
-        return AIAgent(**response.data[0])
-    except Exception as e:
-        logger.error(f"Error getting agent {agent_name}: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Error retrieving agent: {str(e)}")
-
-@lru_cache(maxsize=100)
-def get_cached_tool(tool_id: str) -> Tool:
-    """Get a tool from the database with caching."""
-    try:
-        supabase = get_supabase_client()
-        response = supabase.table('tools').select('*').eq('id', tool_id).execute()
-        if not response.data:
-            raise HTTPException(status_code=404, detail=f"Tool with ID {tool_id} not found")
-        return Tool(**response.data[0])
-    except Exception as e:
-        logger.error(f"Error getting tool {tool_id}: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Error retrieving tool: {str(e)}")
-
-class Service:
-    def __init__(self, api_key: str, agent_name: str):
-        self.client = OpenAI(api_key=api_key)
-        self.supabase = get_supabase_client()
-        self.agent = get_cached_agent(agent_name)
-        tool_ids = self.agent.tools.get('ids', []) if self.agent.tools else []
-        self.tools = self.load_tools(tool_ids)
-        self.context = [{"role": "system", "content": self.agent.system_prompt or ""}]
-        self.api_handlers: Dict[str, Any] = {
-            "Replicate": tool_replicate
-        }
-    
-    def load_tools(self, tool_ids: List[str]) -> List[Dict[str, Any]]:
-        tools = []
-        for tool_id in tool_ids:
+@app.post("/api/input")
+async def input_phase(
+    product_url: Optional[str] = Form(None),
+    creative_prompt: str = Form(...),
+    media: Optional[List[UploadFile]] = File(None)
+):
+    # Scrape product info if URL provided
+    product_data = scrape_url(product_url) if product_url else {}
+    # Save uploaded media
+    media_files = []
+    media_json = []
+    if media:
+        for file in media:
+            file_path = os.path.join(UPLOAD_DIR, file.filename)
+            with open(file_path, "wb") as f:
+                f.write(await file.read())
+            media_files.append(file_path)
+            media_json.append({"path": f"uploads/{file.filename}", "description": ""})
+    # Add scraped images to media_json (use local download for analysis)
+    scraped_image_paths = []
+    if product_data.get("images"):
+        for i, img_url in enumerate(product_data["images"]):
+            # Download image locally for analysis
+            local_path = os.path.join(UPLOAD_DIR, f"scraped_{i}.jpg")
             try:
-                tool = get_cached_tool(tool_id)
-                tools.append({
-                    "type": "function",
-                    "function": {
-                        "name": tool.name,
-                        "description": tool.description,
-                        "parameters": tool.json_schema
-                    }
-                })
-            except Exception as e:
-                logger.error(f"Error loading tool {tool_id}: {str(e)}")
-                continue
-        return tools
+                r = requests.get(img_url, timeout=5)
+                with open(local_path, "wb") as f:
+                    f.write(r.content)
+                scraped_image_paths.append(local_path)
+                media_json.append({"path": img_url, "description": ""})
+            except Exception:
+                pass
+    # Analyze all media (uploaded + scraped)
+    all_media_paths = media_files + scraped_image_paths
+    media_descriptions = analyze_media(all_media_paths) if all_media_paths else {}
+    # Fill in media descriptions
+    for m in media_json:
+        # Try to match by filename or URL ending
+        desc = ""
+        for k, v in media_descriptions.items():
+            if m["path"].endswith(os.path.basename(k)) or os.path.basename(m["path"]) in k:
+                desc = v
+                # Also map the URL to the description if it's a URL
+                if m["path"].startswith("http"):
+                    media_descriptions[m["path"]] = v
+                break
+        m["description"] = desc or "Image"
+    # After filling in media descriptions, map each scraped URL to its local file's description
+    if product_data.get("images"):
+        for i, img_url in enumerate(product_data["images"]):
+            local_path = os.path.join(UPLOAD_DIR, f"scraped_{i}.jpg")
+            if local_path in media_descriptions:
+                media_descriptions[img_url] = media_descriptions[local_path]
+    # Remove duplicates by path
+    seen = set()
+    deduped_media = []
+    for m in media_json:
+        if m["path"] not in seen:
+            deduped_media.append(m)
+            seen.add(m["path"])
+    # Build input for storyboard (no images field)
+    input_json = {
+        "creative_prompt": creative_prompt,
+        "product": {
+            "title": product_data.get("title", ""),
+            "description": product_data.get("description", "")
+        },
+        "media": deduped_media
+    }
+    # Generate storyboard (strict JSON)
+    storyboard_json = generate_storyboard(input_json)
+    # --- Combine uploaded and scraped image URLs for media_files ---
+    uploaded_files = media_files if media_files else []
+    scraped_urls = [m["path"] for m in deduped_media if m["path"].startswith("http")]
+    all_media_files = uploaded_files + scraped_urls
+    return JSONResponse({
+        "product": product_data,
+        "creative_prompt": creative_prompt,
+        "media_files": all_media_files,
+        "media_descriptions": media_descriptions,
+        "storyboard": storyboard_json
+    })
 
-    def run_tool(self, name: str, args: Dict[str, Any]) -> Any:
-        try:
-            # Find the tool in our loaded tools
-            tool = next((t for t in self.tools if t["function"]["name"] == name), None)
-            if not tool:
-                raise ValueError(f"Tool {name} not found in loaded tools")
-                
-            # Get the tool details from database
-            response = self.supabase.table('tools').select('*').eq('name', name).execute()
-            if not response.data:
-                raise ValueError(f"Tool {name} not found in database")
-                
-            tool_details = Tool(**response.data[0])
-            
-            # Get the appropriate handler based on api_name
-            handler = self.api_handlers.get(tool_details.api_name)
-            if not handler:
-                raise ValueError(f"API {tool_details.api_name} not supported")
-                
-            # Call the handler with the model and args
-            return handler.generate(tool_details.model, args)
-        except Exception as e:
-            logger.error(f"Error running tool {name}: {str(e)}")
-            raise
+class RenderVideoRequest(BaseModel):
+    storyboard: str  # JSON string
+    media_files: List[str]
 
-    def call_model(self, message: Optional[str] = None) -> Any:
-        if message is not None:
-            self.context.append({"role": "user", "content": message})
-        
-        try:
-            completion = self.client.chat.completions.create(
-                model=self.agent.model or "gpt-4",
-                messages=self.context,
-                tools=self.tools,
-            )
-            return completion
-        except Exception as e:
-            logger.error(f"Error calling model: {str(e)}")
-            raise
-
-    def call_tools(self, payload: Any) -> None:
-        try:
-            for tool_call in payload.message.tool_calls:
-                name = tool_call.function.name
-                args = json.loads(tool_call.function.arguments)
-                result = self.run_tool(name, args)
-                self.context.append(payload.message)
-                self.context.append({"role": "tool", "tool_call_id": tool_call.id, "content": str(result)})
-        except Exception as e:
-            logger.error(f"Error calling tools: {str(e)}")
-            raise
-
-    def main(self, message: Optional[str] = None) -> str:
-        try:
-            completion = self.call_model(message)
-            payload = completion.choices[0]
-
-            if payload.message.tool_calls is not None:
-                self.call_tools(payload)
-                return self.main(None)
+@app.post("/api/render_video")
+async def render_video_endpoint(req: RenderVideoRequest):
+    # Parse storyboard JSON
+    sb = json.loads(req.storyboard)
+    media_files = []
+    temp_files = []
+    print("[render_video_endpoint] Checking media files for video rendering...")
+    for item in sb.get("media", []):
+        media_path = item["file"]
+        if media_path.startswith("http://") or media_path.startswith("https://"):
+            # Download to temp file, strip query params from extension
+            ext = os.path.splitext(media_path.split("?")[0])[-1] or ".jpg"
+            with tempfile.NamedTemporaryFile(delete=False, suffix=ext, dir=UPLOAD_DIR) as tmp:
+                try:
+                    r = requests.get(media_path, timeout=10)
+                    tmp.write(r.content)
+                    tmp.flush()
+                    # Validate with OpenCV
+                    tmp_path = tmp.name
+                    img = cv2.imread(tmp_path)
+                    print(f"[render_video_endpoint] Downloaded {media_path} -> {tmp_path}, cv2.imread: {img.shape if img is not None else None}")
+                    if img is not None:
+                        media_files.append(tmp_path)
+                        temp_files.append(tmp_path)
+                    else:
+                        print(f"[render_video_endpoint] Downloaded file is not a valid image: {media_path}")
+                        os.remove(tmp_path)
+                except Exception as e:
+                    print(f"[render_video_endpoint] Failed to download {media_path}: {e}")
+        else:
+            # Local file
+            img = cv2.imread(media_path)
+            print(f"[render_video_endpoint] Local file {media_path}, cv2.imread: {img.shape if img is not None else None}")
+            if img is not None:
+                media_files.append(media_path)
             else:
-                self.context.append(payload.message)
-                return payload.message.content
-        except Exception as e:
-            logger.error(f"Error in main function: {str(e)}")
-            raise
-
-class InputData(BaseModel):
-    user_input: str
-    agent_name: str
-
-@app.get("/")
-async def root():
-    return {"message": "Hello World"}
-
-@app.post("/process-input")
-async def process_input(data: InputData):
-    try:
-        logger.info(f"Processing input for agent {data.agent_name}")
-        logger.info(f"User input: {data.user_input}")
-        
-        agent = Service(api_key=KEY, agent_name=data.agent_name)
-        response = agent.main(data.user_input)
-        
-        logger.info(f"Response: {response}")
-        
-        return JSONResponse(
-            content={"response": response},
-            status_code=200,
-            headers={
-                "Access-Control-Allow-Origin": "*",
-                "Access-Control-Allow-Methods": "POST, OPTIONS",
-                "Access-Control-Allow-Headers": "Content-Type",
-            }
-        )
-    except HTTPException as e:
-        logger.error(f"HTTP error processing input: {str(e)}")
-        return JSONResponse(
-            content={"error": e.detail},
-            status_code=e.status_code,
-            headers={
-                "Access-Control-Allow-Origin": "*",
-                "Access-Control-Allow-Methods": "POST, OPTIONS",
-                "Access-Control-Allow-Headers": "Content-Type",
-            }
-        )
-    except Exception as e:
-        logger.error(f"Error processing input: {str(e)}")
-        return JSONResponse(
-            content={"error": str(e)},
-            status_code=500,
-            headers={
-                "Access-Control-Allow-Origin": "*",
-                "Access-Control-Allow-Methods": "POST, OPTIONS",
-                "Access-Control-Allow-Headers": "Content-Type",
-            }
-        )
-
-def main():
-    try:
-        # Example user query
-        user_query = "5 instagram posts for a cafe"
-        
-        print("=" * 80)
-        print(f"Starting service generation for query: {user_query}")
-        print("=" * 80)
-        
-        # Initialize the service builder
-        builder = ServiceBuilder()
-        
-        # Build the service
-        print("\nBuilding service...")
-        service = builder.build_service(user_query)
-        
-        if not service:
-            print("\n❌ Failed to build service")
-            return
-        
-        print("\n✅ Service created successfully!")
-        print(f"Service Name: {service.name}")
-        print(f"Description: {service.description}")
-        
-        # Initialize the tester
-        tester = ServiceTester()
-        
-        # Test the service with sample input
-        test_input = {
-            "cafe_name": "Cozy Corner Cafe",
-            "cafe_description": "A charming cafe serving artisanal coffee and homemade pastries in a cozy atmosphere",
-            "target_audience": "Young professionals and students looking for a quiet place to work or relax"
-        }
-        
-        print("\nTesting service with sample input...")
-        print(f"Input: {json.dumps(test_input, indent=2)}")
-        
-        results = tester.test_service(service, test_input)
-        
-        print("\nTest Results:")
-        print(f"Input Validation: {'✅ Passed' if results['input_validation'] else '❌ Failed'}")
-        print(f"Output Validation: {'✅ Passed' if results['output_validation'] else '❌ Failed'}")
-        
-        if results['output']:
-            print("\nGenerated Output:")
-            print(json.dumps(results['output'], indent=2))
-            
-            # Test the output format
-            if isinstance(results['output'], list) and len(results['output']) == 5:
-                print("\n✅ Output format validation: Passed")
-                print(f"Number of posts generated: {len(results['output'])}")
-                
-                # Check each post
-                for i, post in enumerate(results['output'], 1):
-                    print(f"\nPost {i}:")
-                    print(f"Caption: {post.get('caption', 'Missing caption')}")
-                    print(f"Hashtags: {post.get('hashtags', 'Missing hashtags')}")
-            else:
-                print("\n❌ Output format validation: Failed")
-                print("Expected 5 posts, got:", len(results['output']) if isinstance(results['output'], list) else "non-list output")
-        
-    except Exception as e:
-        print("\n❌ Error occurred:")
-        print(str(e))
-        print("\nTraceback:")
-        traceback.print_exc()
-        sys.exit(1)
-
-if __name__ == "__main__":
-    main()
+                print(f"[render_video_endpoint] Local file is not a valid image: {media_path}")
+    print(f"[render_video_endpoint] Final media_files for video: {media_files}")
+    output_path = os.path.join(UPLOAD_DIR, "output.mp4")
+    video_path = render_video(req.storyboard, media_files, output_path)
+    # Optionally: cleanup temp files after rendering
+    for f in temp_files:
+        try:
+            os.remove(f)
+        except Exception:
+            pass
+    return JSONResponse({"video_path": video_path}) 
