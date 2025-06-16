@@ -27,15 +27,15 @@ os.makedirs(UPLOAD_DIR, exist_ok=True)
 # Mount uploads directory for static file serving
 app.mount("/uploads", StaticFiles(directory=UPLOAD_DIR), name="uploads")
 
-# Get allowed origins from environment variable or use default
-ALLOWED_ORIGINS = os.getenv("ALLOWED_ORIGINS", "*").split(",")
-
+# Update CORS configuration
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=ALLOWED_ORIGINS,
+    allow_origins=["https://discojelly-frontend.onrender.com"],  # Explicitly allow your frontend domain
     allow_credentials=True,
-    allow_methods=["*"],
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],  # Explicitly list allowed methods
     allow_headers=["*"],
+    expose_headers=["*"],
+    max_age=3600,  # Cache preflight requests for 1 hour
 )
 
 # File cleanup task
