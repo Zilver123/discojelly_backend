@@ -3,6 +3,9 @@ import openai
 import os
 import re
 import json
+import logging
+
+logger = logging.getLogger(__name__)
 
 # Placeholder for agent tool registration
 def function_tool(func):
@@ -10,10 +13,16 @@ def function_tool(func):
 
 @function_tool
 def generate_storyboard(input_json: Dict) -> str:
-    print("[generate_storyboard] input_json:", json.dumps(input_json, indent=2))
+    logger.info(f"[generate_storyboard] Starting with input: {json.dumps(input_json, indent=2)}")
     """Generate a storyboard as strict JSON from product info, media, and creative prompt."""
     try:
-        client = openai.OpenAI()
+        # Initialize OpenAI client without proxies
+        client = openai.OpenAI(
+            api_key=os.getenv("OPENAI_API_KEY"),
+            base_url="https://api.openai.com/v1"
+        )
+        logger.info("[generate_storyboard] OpenAI client initialized")
+        
         # Compose a strict prompt for the LLM
         prompt = f'''
 You are an expert short-form video marketer. Given the following JSON input, generate a TikTok-style video storyboard as a JSON object with only these fields:
@@ -24,17 +33,24 @@ Example input:\n{{"creative_prompt": "10 sec vid", "product": {{"title": "Test P
 Example output:\n{{"script": "Meet the Test Product! Soft, cuddly, and perfect for all ages. Grab yours now and snuggle up!", "media": [{{"start": "00:00", "end": "00:05", "file": "/uploads/test1.jpg"}}, {{"start": "00:05", "end": "00:10", "file": "/uploads/test2.jpg"}}]}}
 Input:\n{json.dumps(input_json)}
 '''
+        logger.info("[generate_storyboard] Sending request to OpenAI")
         response = client.chat.completions.create(
             model="gpt-4-turbo-preview",
             messages=[{"role": "user", "content": prompt}],
             max_tokens=512
         )
+        logger.info("[generate_storyboard] Received response from OpenAI")
         content = response.choices[0].message.content
+        logger.info(f"[generate_storyboard] Raw response content: {content}")
+        
         # Try to parse as JSON
         try:
             sb = json.loads(content)
-        except Exception:
+            logger.info(f"[generate_storyboard] Successfully parsed JSON: {json.dumps(sb, indent=2)}")
+        except Exception as e:
+            logger.error(f"[generate_storyboard] Failed to parse JSON: {str(e)}")
             sb = None
+        
         # Fallback: catchy TikTok-style script
         product = input_json.get("product", {})
         title = product.get("title", "")
@@ -48,17 +64,25 @@ Input:\n{json.dumps(input_json)}
             {"start": f"00:{str(i*per).zfill(2)}", "end": f"00:{str((i+1)*per).zfill(2)}", "file": m["path"]}
             for i, m in enumerate(media)
         ]
+        
         if not sb:
+            logger.info("[generate_storyboard] Using fallback storyboard")
             sb = {"script": fallback_script, "media": fallback_media}
+        
         # Post-process: if script is too similar to description or too long, use fallback
         script = sb.get("script", "")
         if (desc.strip() and desc.strip() in script) or len(script) > 220:
+            logger.info("[generate_storyboard] Script too similar to description or too long, using fallback")
             sb["script"] = fallback_script
+        
         # Fallback: if media is missing or empty, use all images
         if not sb.get("media"):
+            logger.info("[generate_storyboard] No media in response, using fallback")
             sb["media"] = fallback_media
+        
         # Fallback: if script is missing, use catchy fallback
         if not sb.get("script"):
+            logger.info("[generate_storyboard] No script in response, using fallback")
             sb["script"] = fallback_script
 
         # --- Enforce sequential, non-overlapping timings for media ---
@@ -74,10 +98,10 @@ Input:\n{json.dumps(input_json)}
         sb["media"] = media_list
         # --- End timing enforcement ---
 
+        logger.info(f"[generate_storyboard] Final storyboard: {json.dumps(sb, indent=2)}")
         return json.dumps(sb)
     except Exception as e:
-        print(f"Error in generate_storyboard: {str(e)}")
-        # Return a valid JSON string with error information
+        logger.error(f"[generate_storyboard] Error: {str(e)}", exc_info=True)
         return json.dumps({
             "script": f"Error generating storyboard: {str(e)}",
             "media": []

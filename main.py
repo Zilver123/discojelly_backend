@@ -19,6 +19,11 @@ from datetime import datetime, timedelta
 import asyncio
 import openai
 import base64
+import logging
+
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 app = FastAPI()
 
@@ -73,62 +78,82 @@ async def input_phase(
     media: Optional[List[UploadFile]] = File(None)
 ):
     try:
+        logger.info(f"Received input request - URL: {product_url}, Prompt: {creative_prompt}, Media files: {[f.filename for f in media] if media else 'None'}")
+        
         # Scrape product info if URL provided
-        product_data = scrape_url(product_url) if product_url else {}
+        product_data = {}
+        if product_url:
+            logger.info(f"Scraping URL: {product_url}")
+            product_data = scrape_url(product_url)
+            logger.info(f"Scraped product data: {json.dumps(product_data, indent=2)}")
+        
         # Save uploaded media
         media_files = []
         media_json = []
         if media:
+            logger.info("Processing uploaded media files")
             for file in media:
-                file_path = os.path.join(UPLOAD_DIR, file.filename)
-                with open(file_path, "wb") as f:
-                    f.write(await file.read())
-                media_files.append(file_path)
-                media_json.append({"path": f"uploads/{file.filename}", "description": ""})
-        # Add scraped images to media_json (use local download for analysis)
+                try:
+                    file_path = os.path.join(UPLOAD_DIR, file.filename)
+                    logger.info(f"Saving file to: {file_path}")
+                    with open(file_path, "wb") as f:
+                        f.write(await file.read())
+                    media_files.append(file_path)
+                    media_json.append({"path": f"uploads/{file.filename}", "description": ""})
+                except Exception as e:
+                    logger.error(f"Error processing media file {file.filename}: {str(e)}")
+                    raise
+        
+        # Add scraped images to media_json
         scraped_image_paths = []
         if product_data.get("images"):
+            logger.info("Processing scraped images")
             for i, img_url in enumerate(product_data["images"]):
-                # Download image locally for analysis
-                local_path = os.path.join(UPLOAD_DIR, f"scraped_{i}.jpg")
                 try:
+                    local_path = os.path.join(UPLOAD_DIR, f"scraped_{i}.jpg")
+                    logger.info(f"Downloading image {i} from {img_url} to {local_path}")
                     r = requests.get(img_url, timeout=5)
                     with open(local_path, "wb") as f:
                         f.write(r.content)
                     scraped_image_paths.append(local_path)
                     media_json.append({"path": img_url, "description": ""})
                 except Exception as e:
-                    print(f"Error downloading image {img_url}: {str(e)}")
+                    logger.error(f"Error downloading image {img_url}: {str(e)}")
                     continue
-        # Analyze all media (uploaded + scraped)
+        
+        # Analyze all media
         all_media_paths = media_files + scraped_image_paths
+        logger.info(f"Analyzing {len(all_media_paths)} media files")
         media_descriptions = analyze_media(all_media_paths) if all_media_paths else {}
+        logger.info(f"Media descriptions: {json.dumps(media_descriptions, indent=2)}")
+        
         # Fill in media descriptions
         for m in media_json:
-            # Try to match by filename or URL ending
             desc = ""
             for k, v in media_descriptions.items():
                 if m["path"].endswith(os.path.basename(k)) or os.path.basename(m["path"]) in k:
                     desc = v
-                    # Also map the URL to the description if it's a URL
                     if m["path"].startswith("http"):
                         media_descriptions[m["path"]] = v
                     break
             m["description"] = desc or "Image"
-        # After filling in media descriptions, map each scraped URL to its local file's description
+        
+        # Map scraped URLs to local descriptions
         if product_data.get("images"):
             for i, img_url in enumerate(product_data["images"]):
                 local_path = os.path.join(UPLOAD_DIR, f"scraped_{i}.jpg")
                 if local_path in media_descriptions:
                     media_descriptions[img_url] = media_descriptions[local_path]
-        # Remove duplicates by path
+        
+        # Remove duplicates
         seen = set()
         deduped_media = []
         for m in media_json:
             if m["path"] not in seen:
                 deduped_media.append(m)
                 seen.add(m["path"])
-        # Build input for storyboard (no images field)
+        
+        # Build input for storyboard
         input_json = {
             "creative_prompt": creative_prompt,
             "product": {
@@ -137,24 +162,32 @@ async def input_phase(
             },
             "media": deduped_media
         }
-        # Generate storyboard (strict JSON)
+        logger.info(f"Generating storyboard with input: {json.dumps(input_json, indent=2)}")
+        
+        # Generate storyboard
         storyboard_json = generate_storyboard(input_json)
-        # --- Combine uploaded and scraped image URLs for media_files ---
+        logger.info(f"Generated storyboard: {storyboard_json}")
+        
+        # Combine media files
         uploaded_files = media_files if media_files else []
         scraped_urls = [m["path"] for m in deduped_media if m["path"].startswith("http")]
         all_media_files = uploaded_files + scraped_urls
-        return JSONResponse({
+        
+        response_data = {
             "product": product_data,
             "creative_prompt": creative_prompt,
             "media_files": all_media_files,
             "media_descriptions": media_descriptions,
             "storyboard": storyboard_json
-        })
+        }
+        logger.info(f"Returning response: {json.dumps(response_data, indent=2)}")
+        return JSONResponse(response_data)
+        
     except Exception as e:
-        print(f"Error in input_phase: {str(e)}")
+        logger.error(f"Error in input_phase: {str(e)}", exc_info=True)
         return JSONResponse(
             status_code=500,
-            content={"error": str(e)}
+            content={"error": str(e), "traceback": str(e.__traceback__)}
         )
 
 class RenderVideoRequest(BaseModel):
