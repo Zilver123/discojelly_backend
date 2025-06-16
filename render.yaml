@@ -1,9 +1,11 @@
 services:
   # A Docker web service
   - type: web
-    name: fastapi-example
+    name: discojelly-backend
     runtime: python
     plan: free
     autoDeploy: false
-    buildCommand: pip install -r requirements.txt
+    buildCommand: |
+      pip install -r requirements.txt
+      pip install -e .
     startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
