@@ -14,22 +14,55 @@ import tempfile
 import shutil
 import json
 import cv2
+import time
+from datetime import datetime, timedelta
+import asyncio
 
 app = FastAPI()
 
+# Create uploads directory if it doesn't exist
+UPLOAD_DIR = "uploads"
+os.makedirs(UPLOAD_DIR, exist_ok=True)
+
 # Mount uploads directory for static file serving
-app.mount("/uploads", StaticFiles(directory="uploads"), name="uploads")
+app.mount("/uploads", StaticFiles(directory=UPLOAD_DIR), name="uploads")
+
+# Get allowed origins from environment variable or use default
+ALLOWED_ORIGINS = os.getenv("ALLOWED_ORIGINS", "*").split(",")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # For dev, allow all. For prod, restrict this.
+    allow_origins=ALLOWED_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-UPLOAD_DIR = "uploads"
-os.makedirs(UPLOAD_DIR, exist_ok=True)
+# File cleanup task
+async def cleanup_old_files():
+    while True:
+        try:
+            # Get current time
+            now = datetime.now()
+            # Clean up files older than 1 hour
+            for filename in os.listdir(UPLOAD_DIR):
+                filepath = os.path.join(UPLOAD_DIR, filename)
+                if os.path.isfile(filepath):
+                    file_time = datetime.fromtimestamp(os.path.getctime(filepath))
+                    if now - file_time > timedelta(hours=1):
+                        try:
+                            os.remove(filepath)
+                            print(f"Cleaned up old file: {filename}")
+                        except Exception as e:
+                            print(f"Error cleaning up {filename}: {e}")
+        except Exception as e:
+            print(f"Error in cleanup task: {e}")
+        # Run cleanup every 15 minutes
+        await asyncio.sleep(900)
+
+@app.on_event("startup")
+async def startup_event():
+    asyncio.create_task(cleanup_old_files())
 
 @app.post("/api/input")
 async def input_phase(
