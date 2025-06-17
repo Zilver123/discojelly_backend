@@ -1,7 +1,6 @@
 from typing import Dict
 import openai
 import os
-import re
 import json
 import logging
 
