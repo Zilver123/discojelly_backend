@@ -4,8 +4,8 @@ from fastapi import UploadFile
 from tools.scrape_url import scrape_url
 from tools.analyze_media import analyze_media
 from tools.generate_storyboard import generate_storyboard
-from .media_processor import MediaProcessor
-from .video_processor import VideoProcessor
+from tools.media_processor import MediaProcessor
+from tools.video_processor import VideoProcessor
 import json
 
 logger = logging.getLogger(__name__)

@@ -3,7 +3,7 @@ from fastapi.responses import JSONResponse
 from typing import List, Optional
 from pydantic import BaseModel
 import logging
-from .tools.pipeline_handler import PipelineHandler
+from tools.pipeline_handler import PipelineHandler
 
 logger = logging.getLogger(__name__)
 

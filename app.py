@@ -1,8 +1,8 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from .config import settings
-from .tools.pipeline_handler import PipelineHandler
+from config import settings
+from tools.pipeline_handler import PipelineHandler
 from typing import Optional, Callable
 
 def create_app(lifespan: Optional[Callable] = None) -> FastAPI:
