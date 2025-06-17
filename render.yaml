@@ -8,6 +8,8 @@ services:
     envVars:
       - key: OPENAI_API_KEY
         sync: false
+      - key: BACKEND_CORS_ORIGINS
+        value: '["https://discojelly-frontend.onrender.com", "http://localhost:3000", "http://localhost:5173"]'
     buildCommand: |
       cd /opt/render/project/src
       mkdir -p uploads

@@ -8,7 +8,11 @@ class Settings(BaseSettings):
     PROJECT_NAME: str = "DiscoJelly Backend"
     
     # CORS Settings
-    BACKEND_CORS_ORIGINS: List[str] = ["*"]
+    BACKEND_CORS_ORIGINS: List[str] = [
+        "https://discojelly-frontend.onrender.com",
+        "http://localhost:3000",  # For local development
+        "http://localhost:5173",  # For local development with Vite
+    ]
     
     # File Settings
     UPLOAD_DIR: str = "uploads"
