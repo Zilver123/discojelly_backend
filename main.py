@@ -1,9 +1,9 @@
 import asyncio
 import logging
 from contextlib import asynccontextmanager
-from .app import create_app
-from .routes import router
-from .config import settings
+from app import create_app
+from routes import router
+from config import settings
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
