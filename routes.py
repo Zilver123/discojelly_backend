@@ -21,9 +21,8 @@ class RenderVideoRequest(BaseModel):
             }
         }
 
-async def get_pipeline() -> PipelineHandler:
+async def get_pipeline(request: Request) -> PipelineHandler:
     """Dependency to get the pipeline handler from app state."""
-    request: Request = Request.get_current()
     return request.app.state.pipeline
 
 @router.post("/input")
