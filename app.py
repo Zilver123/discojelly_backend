@@ -30,7 +30,7 @@ def create_app(lifespan: Optional[Callable] = None) -> FastAPI:
     pipeline = PipelineHandler()
 
     # Mount uploads directory
-    app.mount("/uploads", StaticFiles(directory=pipeline.media_processor.upload_dir), name="uploads")
+    app.mount("/uploads", StaticFiles(directory=pipeline.media_processor.file_manager.upload_dir), name="uploads")
 
     # Store pipeline in app state
     app.state.pipeline = pipeline
