@@ -1,4 +1,4 @@
-from fastapi import APIRouter, UploadFile, File, Form, Depends, HTTPException
+from fastapi import APIRouter, UploadFile, File, Form, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse
 from typing import List, Optional
 from pydantic import BaseModel
@@ -23,7 +23,6 @@ class RenderVideoRequest(BaseModel):
 
 async def get_pipeline() -> PipelineHandler:
     """Dependency to get the pipeline handler from app state."""
-    from fastapi import Request
     request: Request = Request.get_current()
     return request.app.state.pipeline
 
@@ -42,15 +41,31 @@ async def input_phase(
     - **media**: Optional list of media files to process
     """
     try:
+        logger.info(f"Processing input - URL: {product_url}, Prompt: {creative_prompt}")
         response_data = await pipeline.handle_input_pipeline(
             product_url,
             creative_prompt,
             media
         )
-        return JSONResponse(response_data)
+        return JSONResponse(
+            content=response_data,
+            headers={
+                "Access-Control-Allow-Origin": "*",
+                "Access-Control-Allow-Methods": "*",
+                "Access-Control-Allow-Headers": "*",
+            }
+        )
     except Exception as e:
         logger.error(f"Error in input_phase: {str(e)}", exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
+        return JSONResponse(
+            status_code=500,
+            content={"detail": str(e)},
+            headers={
+                "Access-Control-Allow-Origin": "*",
+                "Access-Control-Allow-Methods": "*",
+                "Access-Control-Allow-Headers": "*",
+            }
+        )
 
 @router.post("/render_video")
 async def render_video_endpoint(
@@ -64,13 +79,36 @@ async def render_video_endpoint(
     - **media_files**: List of paths to media files to use in the video
     """
     try:
+        logger.info("Starting video rendering")
         video_path = await pipeline.handle_video_pipeline(req.storyboard)
-        return JSONResponse({"video_path": video_path})
+        return JSONResponse(
+            content={"video_path": video_path},
+            headers={
+                "Access-Control-Allow-Origin": "*",
+                "Access-Control-Allow-Methods": "*",
+                "Access-Control-Allow-Headers": "*",
+            }
+        )
     except Exception as e:
         logger.error(f"Error in render_video_endpoint: {str(e)}", exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
+        return JSONResponse(
+            status_code=500,
+            content={"detail": str(e)},
+            headers={
+                "Access-Control-Allow-Origin": "*",
+                "Access-Control-Allow-Methods": "*",
+                "Access-Control-Allow-Headers": "*",
+            }
+        )
 
 @router.get("/health")
 async def health_check():
     """Health check endpoint."""
-    return {"status": "healthy"} 
+    return JSONResponse(
+        content={"status": "healthy"},
+        headers={
+            "Access-Control-Allow-Origin": "*",
+            "Access-Control-Allow-Methods": "*",
+            "Access-Control-Allow-Headers": "*",
+        }
+    ) 

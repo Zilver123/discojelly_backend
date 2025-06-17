@@ -1,9 +1,28 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
+from fastapi.responses import JSONResponse
 from config import settings
 from tools.pipeline_handler import PipelineHandler
 from typing import Optional, Callable
+import logging
+
+logger = logging.getLogger(__name__)
+
+async def catch_exceptions_middleware(request: Request, call_next):
+    try:
+        return await call_next(request)
+    except Exception as e:
+        logger.error(f"Unhandled error: {str(e)}", exc_info=True)
+        return JSONResponse(
+            status_code=500,
+            content={"detail": str(e)},
+            headers={
+                "Access-Control-Allow-Origin": "*",
+                "Access-Control-Allow-Methods": "*",
+                "Access-Control-Allow-Headers": "*",
+            }
+        )
 
 def create_app(lifespan: Optional[Callable] = None) -> FastAPI:
     """Create and configure the FastAPI application."""
@@ -14,6 +33,9 @@ def create_app(lifespan: Optional[Callable] = None) -> FastAPI:
         redoc_url="/redoc",
         lifespan=lifespan
     )
+
+    # Add error handling middleware
+    app.middleware("http")(catch_exceptions_middleware)
 
     # Set up CORS
     app.add_middleware(
