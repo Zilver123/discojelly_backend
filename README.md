@@ -1,4 +1,4 @@
-# DiscoJelly Backend
+# DiscoJelly_backend
 
 An AI-powered video generation system that creates TikTok-style marketing videos from product information and media.
 
