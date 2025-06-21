@@ -1,26 +1,15 @@
-from pydantic_settings import BaseSettings
-from typing import List
-import os
+from pydantic_settings import BaseSettings, SettingsConfigDict
+from typing import Optional
 
 class Settings(BaseSettings):
-    # API Settings
-    API_V1_STR: str = "/api"
-    PROJECT_NAME: str = "DiscoJelly Backend"
-    
-    # CORS Settings
-    BACKEND_CORS_ORIGINS: List[str] = [
-        "https://discojelly-frontend.onrender.com",
-        "http://localhost:3000",  # For local development
-        "http://localhost:5173",  # For local development with Vite
-    ]
-    
-    # File Settings
-    UPLOAD_DIR: str = "uploads"
-    FILE_CLEANUP_INTERVAL: int = 900  # 15 minutes
-    FILE_MAX_AGE: int = 3600  # 1 hour
-    
-    class Config:
-        case_sensitive = True
-        env_file = ".env"
+    # These variables should be set in a .env file
+    # SUPABASE_URL="YOUR_SUPABASE_URL"
+    # SUPABASE_KEY="YOUR_SUPABASE_ANON_KEY"
+    supabase_url: Optional[str] = None
+    supabase_key: Optional[str] = None
+    openai_api_key: Optional[str] = None
+    backend_cors_origins: Optional[str] = "*"  # Default to allow all for development
+
+    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
 settings = Settings() 
